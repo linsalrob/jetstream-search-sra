@@ -1,0 +1,36 @@
+#!/bin/bash
+
+set -e
+
+function is_job_running
+{
+    STATUS=`condor_q $1 -nob -af JobStatus 2>/dev/null`
+    if [ "x$STATUS" = "x" ]; then
+        return 1
+     fi
+     return 0
+}
+
+
+if [ ! -n "$1" -o ! -n "$2" ]; then
+        echo "Usage: ./`basename $0` <file with list of SRA IDs> <reference basename>"
+        echo "Example: ./`basename $0` sra_ids.txt crassphage"
+        exit $E_BADARGS
+fi
+
+TOP_DIR=`dirname $0`
+TOP_DIR=`cd $TOP_DIR && pwd`
+
+# define WORK_DIR so that submit-dag does not create a new one
+export WORK_DIR=`pwd`
+$TOP_DIR/submit-dag $1 $2 2>&1 | tee submit.log
+
+# now wait for the dag to complete
+CONDOR_JOB_ID=`cat submit.log | grep "submitted to cluster" | perl -p -i -e 's/.*cluster ([0-9]+).*/$1/'`
+echo "Monitoring HTCondor job id $CONDOR_JOB_ID"
+
+while is_job_running $CONDOR_JOB_ID; do
+    sleep 10s
+done
+
+
