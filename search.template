@@ -1,0 +1,37 @@
+
+Universe = vanilla
+
+Requirements = SRA_Wrangler_Mounted == True
+Rank = DaemonStartTime
+request_cpus = 1
+request_memory = 1.5 GB
+request_disk = 2 GB
+
+executable = ../search.sh
+arguments = $REF_BASENAME $SRA_ID_LIST
+
+transfer_input_files = ../$REF_BASENAME.1.bt2, ../$REF_BASENAME.2.bt2, ../$REF_BASENAME.3.bt2, ../$REF_BASENAME.4.bt2, ../$REF_BASENAME.rev.1.bt2, ../$REF_BASENAME.rev.2.bt2
+transfer_output_files = $OUTPUT_FILES
+
+Output = $JOB_COUNT.out
+Error = $JOB_COUNT.err
+
+Log = ../jobs.log
+
+should_transfer_files = YES
+when_to_transfer_output = ON_EXIT
+
+# Send the job to Held state on failure
+on_exit_hold = (ExitBySignal == True) || (ExitCode != 0)
+
+# Periodically retry the jobs every 3 minutes for a certain number of tries
+periodic_release = NumJobStarts < 5 && (CurrentTime - EnteredCurrentStatus) > 3*60
+
+# remove failed jobs after retries
+periodic_remove = JobStatus == 5 && NumJobStarts >= 5
+
+# extra attributes
++wf_run_id = "$RUN_ID"
+
+queue 1
+

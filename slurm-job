@@ -1,36 +1,148 @@
 #!/bin/bash
 
-set -e
+ADMIN_EMAILS="raedwards@gmail.com, rynge@isi.edu, eroma_a@yahoo.com"
 
-function is_job_running
+function my_log
 {
-    STATUS=`condor_q $1 -nob -af JobStatus 2>/dev/null`
-    if [ "x$STATUS" = "x" ]; then
-        return 1
-     fi
-     return 0
+    echo "INFO:  $@"
 }
 
 
-if [ ! -n "$1" -o ! -n "$2" ]; then
-        echo "Usage: ./`basename $0` <file with list of SRA IDs> <reference basename>"
-        echo "Example: ./`basename $0` sra_ids.txt crassphage"
-        exit $E_BADARGS
-fi
+function wait_for_dag
+{
+    JOB_ID=$1
+
+    ERROR_COUNT=0
+    DONE=0
+    while [ $DONE = 0 ]; do
+
+	# EXITING WITH STATUS 3 - condor restart
+        if (cat sra.dag.dagman.out | tail -n 1 | grep -v "EXITING WITH STATUS 3" | grep "EXITING WITH STATUS") >/dev/null 2>&1; then
+            my_log "Job completed (according to the DAGMan log file)"
+            return 0
+        fi
+
+        #STATUS=`condor_q $JOB_ID -nob -af JobStatus 2>/dev/null`
+        #if [ "X$STATUS" = "X" ]; then
+        #    # can't find dag - try for a while, and then give up
+        #    ERROR_COUNT=$(($ERROR_COUNT + 1))
+        #    if [ $ERROR_COUNT -gt 100 ]; then
+        #        my_log "Unable to monitor job - giving up!"
+        #        return 0
+        #    fi
+        #else
+        #    # see http://pages.cs.wisc.edu/~adesmet/status.html
+        #    if [ "X$STATUS" = "X5" ]; then
+        #        my_log "Job completed (according to job status)"
+        #        return 0
+        #    elif [ "X$STATUS" = "X2" ]; then
+        #        ERROR_COUNT=0
+        #    fi
+        #fi
+
+        sleep 20s
+    done
+
+    return 0
+}
+
+function cancel_search
+{
+    if [ "x$CONDOR_JOB_ID" != "x" ]; then
+        echo "Canceling HTCondor job $CONDOR_JOB_ID ..."
+    	condor_rm $CONDOR_JOB_ID
+    fi
+    sleep 3s
+}
+
+
+echo
+echo
+ls -l
+echo
+echo
 
 TOP_DIR=`dirname $0`
 TOP_DIR=`cd $TOP_DIR && pwd`
 
+# this script assumes the current working directory has files
+# uploaded by the portal: reference and optionally sra_ids.txt
+
+# handle the case where users select to use a pre-defined id file
+if [ ! -e sra_ids.txt ]; then
+    if [ -e /srv/sra-search/pre-defined/$2 ]; then
+        cp /srv/sra-search/pre-defined/$2 sra_ids.txt
+    else
+        my_log "$2 is not a valid pre-defined id file"
+        exit 1
+    fi
+fi
+
 # define WORK_DIR so that submit-dag does not create a new one
 export WORK_DIR=`pwd`
-$TOP_DIR/submit-dag $1 $2 2>&1 | tee submit.log
+$TOP_DIR/submit-dag sra_ids.txt reference 2>&1 | tee submit.log
 
 # now wait for the dag to complete
 CONDOR_JOB_ID=`cat submit.log | grep "submitted to cluster" | perl -p -i -e 's/.*cluster ([0-9]+).*/$1/'`
-echo "Monitoring HTCondor job id $CONDOR_JOB_ID"
+if [ "X$CONDOR_JOB_ID" = "X" ]; then
+    my_log "Search job submit failed!"
+    exit 1
+fi
+my_log "Monitoring HTCondor job id $CONDOR_JOB_ID"
 
-while is_job_running $CONDOR_JOB_ID; do
-    sleep 10s
-done
+# clean up if the job is canceled
+trap "cancel_search" SIGINT SIGTERM
+
+# also send email about it
+if [ "X$USER" = "Xgw" ]; then
+    cat <<EOF | mailx -s "SRA Gateway: New search submitted - $SLURM_SUBMIT_DIR" "$ADMIN_EMAILS"
+Started a new SRA Gateway search for user $AIRAVATA_USERNAME:
+
+SLURM_SUBMIT_DIR = $SLURM_SUBMIT_DIR
+HTCondor DAG ID = $CONDOR_JOB_ID
+EOF
+fi
+
+wait_for_dag $CONDOR_JOB_ID
+
+if [ -e report.txt ]; then
+    echo
+    cat report.txt
+fi
+
+MAIL_SUBJECT="SRA Gateway search: successful - $SLURM_SUBMIT_DIR"
+MAIL_BODY_FILE=body.txt
+EXIT_CODE=0
+cat <<EOF >$MAIL_BODY_FILE
+SLURM_SUBMIT_DIR = $SLURM_SUBMIT_DIR
+HTCondor DAG ID = $CONDOR_JOB_ID
+
+EOF
+if (cat sra.dag.dagman.out | tail -n 1 | grep "STATUS 0") >/dev/null 2>&1; then
+    echo
+    echo "Search finished successfully!"
+    echo
+    cat report.txt >>$MAIL_BODY_FILE
+else
+    echo
+    echo "The search finished with errors. Here are the last 100 lines of the log:"
+    echo
+    if [ -e sra.dag.dagman.out ]; then
+        tail -n 100 sra.dag.dagman.out
+    fi
+    MAIL_SUBJECT="SRA Gateway search: failed - $SLURM_SUBMIT_DIR"
+    echo "\n\nThe search finished with errors. Here are the last 100 lines of the log:\n" >>$MAIL_BODY_FILE
+    tail -n 100 sra.dag.dagman.out >>$MAIL_BODY_FILE
+    EXIT_CODE=1
+fi
+
+# send admin email
+if [ "X$USER" = "Xgw" ]; then
+    cat $MAIL_BODY_FILE | mailx -s "$MAIL_SUBJECT" "$ADMIN_EMAILS"
+fi
+
+CONDOR_JOB_ID=""
+
+exit $EXIT_CODE
 
 

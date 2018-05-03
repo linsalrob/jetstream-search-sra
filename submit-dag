@@ -4,27 +4,48 @@ set -e
 
 if [ ! -n "$1" -o ! -n "$2" ]; then
         echo "Usage: ./`basename $0` <file with list of SRA IDs> <reference basename>"
-        echo "Example: ./`basename $0` tests/01/sra_ids.txt tests/01/crassphage"
+        echo "Example: ./`basename $0` tests/01/sra_ids.txt tests/01/crassphage.fna"
         exit $E_BADARGS
 fi
 
+# ensure the files are in ASCII format
+if ! (file --brief $1 | grep ASCII) >/dev/null 2>&1; then
+    echo "ERROR: id list file is not in ASCII format"
+    exit 1
+fi
+if ! (file --brief $2 | grep ASCII) >/dev/null 2>&1; then
+    echo "ERROR: Reference file is not in ASCII format"
+    exit 1
+fi
+
 SRA_IDS=`basename $1`
-REF_BASENAME=`basename $2`
+REF_FILENAME=`basename $2`
+
+export REF_BASENAME=`echo $REF_FILENAME | perl -p -e 's/\.[a-zA-Z]+$//'`
+if [ "$REF_BASENAME" = "$REF_FILENAME" ]; then
+    # ref file came in without extension - make a copy
+    cp $REF_FILENAME $REF_FILENAME.fna
+    REF_FILENAME="$REF_FILENAME.fna"
+fi
 
 echo "Creating a DAG for running $SRA_IDS against $REF_BASENAME ..."
 
 TOP_DIR=`dirname $0`
 TOP_DIR=`cd $TOP_DIR && pwd`
 
+# used for directories, and track usage
+export RUN_ID=`uuidgen`
+
 # if not already defined, create a work dir for this run
 if [ "x$WORK_DIR" = "x" ]; then
-    WORK_DIR=$HOME/runs/`date +'%Y%m%d-%H%M%S'`
+    WORK_DIR=$HOME/runs/$RUN_ID
     mkdir -p $WORK_DIR
     echo
     echo "Work directory is $WORK_DIR"
 
     # make copies of the input files
-    cp $1 $2* $WORK_DIR/
+    cp $1 $WORK_DIR/
+    cp $2 $WORK_DIR/$REF_BASENAME.fna
 fi
 
 # and of the templates/job files
@@ -33,49 +54,92 @@ cp *.sh *.template $WORK_DIR/
 
 cd $WORK_DIR
 
-# final job first, so we can reference it in the parent-child
-# relationships for the actual jobs
+# index the ref genome
+envsubst <index.template >index.submit
+cat >>sra.dag <<EOF
+JOB  INDEX  index.submit
+EOF
+
+# define final job before search jobs, so we can reference it in the
+# parent-child relationships for the actual jobs
 envsubst <local-prepare-outputs.template >local-prepare-outputs.submit
 cat >>sra.dag <<EOF
-
-JOB  ID_PREPARE_OUTPUTS  local-prepare-outputs.submit
+JOB  PREPARE_OUTPUTS  local-prepare-outputs.submit
 EOF
 
 # build the HTCondor submit files and DAG
-I=0
+SRA_COUNT=0
+JOB_COUNT=0
 SUB_DIR=0
+SRA_ID_LIST=""
+OUTPUT_FILES=""
 for SRA_ID in `cat $SRA_IDS | sort | uniq`; do
+   
+    # TODO: handle missing inputs smarter way
+    if [ ! -e /nas/wrangler/NCBI/SRA/Downloads/fastq/$SRA_ID.fastq.gz ]; then
+        echo "Warning: Missing SRA data: $SRA_ID"
+        continue
+    fi
 
-    if [ $(($I % 300)) -eq 0 ]; then
+    SRA_COUNT=$(($SRA_COUNT + 1))
+
+    # for the job template
+    export SRA_ID_LIST="$SRA_ID_LIST $SRA_ID"
+    export OUTPUT_FILES=`echo "$OUTPUT_FILES, $SRA_ID.bam, $SRA_ID.bam.bai" | sed 's/^ *,//'`
+    
+    # 50 searches per job
+    if [ $(($SRA_COUNT % 50)) -eq 0 ]; then
+    
+        # 50 jobs per directory
+        if [ $(($JOB_COUNT % 50)) -eq 0 ]; then
+            export SUB_DIR=$(($SUB_DIR + 1))
+            mkdir -p $SUB_DIR
+        fi
+        export JOB_COUNT=$(($JOB_COUNT + 1))
+
+        # generate the job from the template    
+        envsubst <search.template >$SUB_DIR/$JOB_COUNT.submit
+
+        # add job to the dag
+        cat >>sra.dag <<EOF
+
+JOB  ID$JOB_COUNT  $JOB_COUNT.submit  DIR $SUB_DIR
+RETRY ID$JOB_COUNT 3
+PARENT INDEX CHILD ID$JOB_COUNT
+PARENT ID$JOB_COUNT CHILD PREPARE_OUTPUTS
+EOF
+    	SRA_ID_LIST=""
+    	OUTPUT_FILES=""
+    fi
+
+done
+
+# leftover jobs
+if [ "X$SRA_ID_LIST" != "X" ]; then
+    # 50 jobs per directory
+    if [ $(($JOB_COUNT % 50)) -eq 0 ]; then
         export SUB_DIR=$(($SUB_DIR + 1))
         mkdir -p $SUB_DIR
     fi
-    I=$(($I + 1))
-
-    # for the job template
-    export SRA_ID
-    export REF_BASENAME
-    INPUT_FILES=""
-    for REF_FILE in `ls $REF_BASENAME*`; do
-        INPUT_FILES="$INPUT_FILES ../$REF_FILE,"
-    done
-    INPUT_FILES=`echo "$INPUT_FILES" | sed 's/, *$//'`
-    export INPUT_FILES
-
-    export OUTPUT_FILES="$SRA_ID.bam, $SRA_ID.bam.bai"
+    export JOB_COUNT=$(($JOB_COUNT + 1))
 
     # generate the job from the template    
-    envsubst <job.template >$SUB_DIR/$SRA_ID.submit
+    envsubst <search.template >$SUB_DIR/$JOB_COUNT.submit
 
     # add job to the dag
     cat >>sra.dag <<EOF
 
-JOB  ID$SRA_ID  $SRA_ID.submit  DIR $SUB_DIR
-PARENT ID$SRA_ID CHILD ID_PREPARE_OUTPUTS
+JOB  ID$JOB_COUNT  $JOB_COUNT.submit  DIR $SUB_DIR
+RETRY ID$JOB_COUNT 3
+PARENT INDEX CHILD ID$JOB_COUNT
+PARENT ID$JOB_COUNT CHILD PREPARE_OUTPUTS
 EOF
+fi
 
-done
+echo "Created $JOB_COUNT jobs to process $SRA_COUNT ids"
 
-condor_submit_dag -notification NEVER -maxidle 1000 sra.dag
+
+
+condor_submit_dag -notification NEVER -maxidle 50 sra.dag
 
 
