@@ -68,12 +68,19 @@ TOP_DIR=`cd $TOP_DIR && pwd`
 # this script assumes the current working directory has files
 # uploaded by the portal: reference and optionally sra_ids.txt
 
-# handle the case where users select to use a pre-defined id file
-if [ ! -e sra_ids.txt ]; then
-    if [ -e /srv/sra-search/pre-defined/$2 ]; then
-        cp /srv/sra-search/pre-defined/$2 sra_ids.txt
+# is input a predefined or user supplied file?
+if [ -e /srv/sra-search/pre-defined/$2 ]; then
+    cp /srv/sra-search/pre-defined/$2 sra_ids.txt
+else
+    # try to determine the filename
+    sra_list_file=`ls | egrep -v "(\.slurm|\.stdout|\.stderr)\$" | egrep -v "^$1\$"`
+    file_count=`echo $sra_list_file | wc -l`
+    if [ $file_count = 1 ]; then
+        if [ "$sra_list_file" != "sra_ids.txt" ]; then
+            cp "$sra_list_file" sra_ids.txt
+        fi
     else
-        my_log "$2 is not a valid pre-defined id file"
+        my_log "Unable to determine the sra list file input"
         exit 1
     fi
 fi
