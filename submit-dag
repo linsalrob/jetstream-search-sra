@@ -18,6 +18,15 @@ if ! (file --brief $2 | grep ASCII) >/dev/null 2>&1; then
     exit 1
 fi
 
+# always run dos2unix on the fasta file
+dos2unix --quiet $2 
+
+# also run a fasta check
+if ! /usr/local/fasta_validator/fasta_validate -v $2 2>&1; then
+    echo "ERROR: Reference file is not in FASTA format"
+    exit 1
+fi
+
 SRA_IDS=`basename $1`
 REF_FILENAME=`basename $2`
 
