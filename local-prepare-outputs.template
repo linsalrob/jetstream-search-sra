@@ -17,6 +17,7 @@ periodic_release =  (NumJobStarts < 5) && ((CurrentTime - EnteredCurrentStatus) 
 
 # extra attributes
 +wf_run_id = "$RUN_ID"
++airavata_username = "$AIRAVATA_USERNAME"
 
 queue 1
 

@@ -139,7 +139,6 @@ fi
 echo "Created $JOB_COUNT jobs to process $SRA_COUNT ids"
 
 
-
-condor_submit_dag -notification NEVER -maxidle 50 sra.dag
+condor_submit_dag -notification NEVER -maxidle 100 sra.dag
 
 

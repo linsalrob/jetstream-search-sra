@@ -32,6 +32,7 @@ periodic_remove = JobStatus == 5 && NumJobStarts >= 5
 
 # extra attributes
 +wf_run_id = "$RUN_ID"
++airavata_username = "$AIRAVATA_USERNAME"
 
 queue
 
