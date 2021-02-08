@@ -1,7 +1,7 @@
 
 Universe = vanilla
 
-Requirements = SRA_Wrangler_Mounted == True
+Requirements = SRA_Data_Mounted == True
 Rank = DaemonStartTime
 request_cpus = 1
 request_memory = 1.5 GB

@@ -73,13 +73,17 @@ if [ -e /srv/sra-search/pre-defined/$2 ]; then
     cp /srv/sra-search/pre-defined/$2 sra_ids.txt
 else
     # try to determine the filename
-    sra_list_file=`ls | egrep -v "(\.slurm|\.stdout|\.stderr)\$" | egrep -v "^$1\$"`
-    file_count=`echo $sra_list_file | wc -l`
-    if [ $file_count = 1 ]; then
-        if [ "$sra_list_file" != "sra_ids.txt" ]; then
-            cp "$sra_list_file" sra_ids.txt
+    found=0
+    for file in `ls | egrep -v "(\.slurm|\.stdout|\.stderr)\$" | egrep -v "^$1\$"`; do
+        if (head -n 5 $file | egrep "^(SRR|DRR|ERR)") >/dev/null 2>&1; then
+            if [ "$file" != "sra_ids.txt" ]; then
+                cp "$file" sra_ids.txt
+            fi
+            found=1
+            break
         fi
-    else
+    done
+    if [ "X$found" = "X" ]; then
         my_log "Unable to determine the sra list file input"
         exit 1
     fi
@@ -87,7 +91,7 @@ fi
 
 # define WORK_DIR so that submit-dag does not create a new one
 export WORK_DIR=`pwd`
-$TOP_DIR/submit-dag sra_ids.txt reference 2>&1 | tee submit.log
+$TOP_DIR/submit-dag sra_ids.txt $1 2>&1 | tee submit.log
 
 # now wait for the dag to complete
 CONDOR_JOB_ID=`cat submit.log | grep "submitted to cluster" | perl -p -i -e 's/.*cluster ([0-9]+).*/$1/'`

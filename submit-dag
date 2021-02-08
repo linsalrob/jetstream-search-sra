@@ -8,6 +8,12 @@ if [ ! -n "$1" -o ! -n "$2" ]; then
         exit $E_BADARGS
 fi
 
+# always run dos2unix on the sra id file
+dos2unix --quiet $1
+
+# always run dos2unix on the fasta file
+dos2unix --quiet $2 
+
 # ensure the files are in ASCII format
 if ! (file --brief $1 | grep ASCII) >/dev/null 2>&1; then
     echo "ERROR: id list file is not in ASCII format"
@@ -17,9 +23,6 @@ if ! (file --brief $2 | grep ASCII) >/dev/null 2>&1; then
     echo "ERROR: Reference file is not in ASCII format"
     exit 1
 fi
-
-# always run dos2unix on the fasta file
-dos2unix --quiet $2 
 
 # also run a fasta check
 if ! /usr/local/fasta_validator/fasta_validate -v $2 2>&1; then
@@ -31,9 +34,9 @@ SRA_IDS=`basename $1`
 REF_FILENAME=`basename $2`
 
 export REF_BASENAME=`echo $REF_FILENAME | perl -p -e 's/\.[a-zA-Z]+$//'`
-if [ "$REF_BASENAME" = "$REF_FILENAME" ]; then
-    # ref file came in without extension - make a copy
-    cp $REF_FILENAME $REF_FILENAME.fna
+if [ ! -e "$REF_BASENAME.fna" ]; then
+    #  we want a .fna file for consistency
+    cp $REF_FILENAME $REF_BASENAME.fna
     REF_FILENAME="$REF_FILENAME.fna"
 fi
 
@@ -85,7 +88,7 @@ OUTPUT_FILES=""
 for SRA_ID in `cat $SRA_IDS | sort | uniq`; do
    
     # TODO: handle missing inputs smarter way
-    if [ ! -e /nas/wrangler/NCBI/SRA/Downloads/fastq/$SRA_ID.fastq.gz ]; then
+    if [ ! -e /nas/sra-data/fasta/current/${SRA_ID:0:3}/${SRA_ID:0:6}/${SRA_ID}.fasta.gz ]; then
         echo "Warning: Missing SRA data: $SRA_ID"
         continue
     fi
@@ -96,8 +99,8 @@ for SRA_ID in `cat $SRA_IDS | sort | uniq`; do
     export SRA_ID_LIST="$SRA_ID_LIST $SRA_ID"
     export OUTPUT_FILES=`echo "$OUTPUT_FILES, $SRA_ID.bam, $SRA_ID.bam.bai" | sed 's/^ *,//'`
     
-    # 50 searches per job
-    if [ $(($SRA_COUNT % 50)) -eq 0 ]; then
+    # 200 searches per job
+    if [ $(($SRA_COUNT % 200)) -eq 0 ]; then
     
         # 50 jobs per directory
         if [ $(($JOB_COUNT % 50)) -eq 0 ]; then
@@ -148,6 +151,6 @@ fi
 echo "Created $JOB_COUNT jobs to process $SRA_COUNT ids"
 
 
-condor_submit_dag -notification NEVER -maxidle 100 sra.dag
+condor_submit_dag -notification NEVER -maxidle 200 sra.dag
 
 
